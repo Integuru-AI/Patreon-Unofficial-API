@@ -51,18 +51,11 @@ class PatreonIntegration(Integration):
                 "Patreon: Auth failed",
                 response.status,
             )
-        elif response.status == 400:
-            raise IntegrationAPIError(
-                self.integration_name,
-                f"{response.reason}",
-                response.status,
-                response.reason,
-            )
         else:
             raise IntegrationAPIError(
                 self.integration_name,
                 "Internal Server Error",
-                response.status,
+                500,
                 response.reason,
             )
 
@@ -342,7 +335,7 @@ class PatreonIntegration(Integration):
         for item in response_data['data']:
             # Extract date from start_date for consistent ID
             start_date = item['attributes']['start_date']
-            date_part = start_date[:10]  # YYYY-MM-DD
+            date_part = start_date[:10]
 
             sanitized_item = {
                 'id': f"{date_part}",
