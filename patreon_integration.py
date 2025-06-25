@@ -1,13 +1,21 @@
 import json
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 import aiohttp
+from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from submodule_integrations.models.integration import Integration
 from submodule_integrations.utils.errors import IntegrationAuthError, IntegrationAPIError
+
+class SwitchCredentials(BaseModel):
+    old_password: str
+    new_password: Optional[str] = None
+    new_email: Optional[str] = None
 
 
 class PatreonIntegration(Integration):
@@ -45,6 +53,10 @@ class PatreonIntegration(Integration):
                 data = await response.text()
 
             return data
+        
+        if response.status == 204:
+            return "Successful"
+
         print(await response.text())
         if response.status == 401:
             raise IntegrationAuthError(
@@ -440,3 +452,102 @@ class PatreonIntegration(Integration):
             error_code="server_error",
             status_code=500,
         )
+    
+    async def change_patreon_credentials(self, request:SwitchCredentials):
+        """
+        Reverse engineers the process of changing credentials on Patreon.
+
+        This method disconnects a Google account, and then optionally changes the
+        email and/or password for a Patreon account.
+        """
+        if not request.new_email and not request.new_password:
+            print("Error: You must provide a new email or a new password to change.")
+            return JSONResponse(status_code=400, content={
+                "message": "You must provide a new email or a new password to change."
+            })
+
+        switch_headers = self.headers.copy()
+        print("Fetching CSRF token from account settings...")
+        try:
+            account_page_res = await self._make_request("GET", "https://www.patreon.com/settings/account", headers=switch_headers)
+            soup = BeautifulSoup(account_page_res, "html.parser")
+            csrf_token_meta = soup.find("meta", {"name": "csrf-token"})
+            if not csrf_token_meta or not csrf_token_meta.get("content"):
+                print("Error: Could not find a valid CSRF token. Is your cookie correct?")
+                return JSONResponse(status_code=500, content={
+                    "message": "Something went wrong fetching CSRF token. Please re-authenticate and try again"
+                })
+            csrf_token = csrf_token_meta.get("content")
+            switch_headers.update({"x-csrf-signature": csrf_token})
+            print("Successfully retrieved CSRF token.")
+        except Exception as e:
+                print(f"Error fetching CSRF token: {e}")
+                return JSONResponse(status_code=500, content={
+                    "message": "Something went wrong fetching CSRF token."
+                })
+
+        # 2. Disconnect Google Account
+        print("\nAttempting to disconnect Google account...")
+        disconnect_url = "https://www.patreon.com/api/user/disconnect-google?json-api-version=1.0&json-api-use-default-includes=false"
+        try:
+            disconnect_res = await self._make_request("POST", disconnect_url, headers=switch_headers)
+            if disconnect_res == "Successful":
+                print("Successfully disconnected auth service")
+            else:
+                print("Failed to disconnect auth service")
+        except Exception as e:
+                print(f"An error occurred while trying to disconnect Google: {e}")
+
+        email_res_string = "No email provided to change."
+        # 3. Change Email (if provided)
+        if request.new_email:
+            print("\nUpdating email address...")
+            email_change_url = "https://www.patreon.com/api/current_user?include=campaign.creator.null&fields[user]=email&json-api-version=1.0"
+            email_payload = {
+                "data": {
+                    "type": "user",
+                    "attributes": {"email": request.new_email, "old_password": request.old_password},
+                }
+            }
+            try:
+                email_res = await self._make_request("PATCH", email_change_url, json=email_payload, headers=switch_headers)
+                if email_res and email_res.get("data"):
+                    print(f"Successfully changed email to: {request.new_email}")
+                    email_res_string = "Successfully changed email. A verification code has been sent to your inbox."
+                else:
+                    email_res_string = "Failed to change email."
+                    print(email_res_string)
+                    print(f"Response: {email_res}")
+            except Exception as e:
+                print(f"An error occurred during email change: {e}")
+                email_res_string = "Failed to change email."
+
+        password_res_string = "No password provided."
+        # 4. Change Password (if provided)
+        if request.new_password:
+            print("\nUpdating password...")
+            password_change_url = "https://www.patreon.com/api/settings/change-password?json-api-version=1.0"
+            password_payload = {
+                "data": {
+                    "old_password": request.old_password,
+                    "new_password": request.new_password,
+                    "new_password_confirmation": request.new_password,
+                }
+            }
+            try:
+                password_res = await self._make_request("POST", password_change_url, json=password_payload, headers=switch_headers)
+                if password_res == "Successful":
+                    password_res_string = "Successfully changed password."
+                    print(password_res_string)
+                else:
+                    password_res_string = "Failed to change password."
+                    print(password_res_string)
+                    print(f"Response: {password_res}")
+            except Exception as e:
+                print(f"An error occurred during password change: {e}")
+                password_res_string = "Failed to change password."
+
+
+        return JSONResponse(status_code=200, content={
+                    "message": f"{email_res_string} {password_res_string}"
+                })
