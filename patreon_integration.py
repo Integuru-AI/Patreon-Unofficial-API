@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from submodule_integrations.models.integration import Integration
 from submodule_integrations.utils.errors import IntegrationAuthError, IntegrationAPIError
 
+
 class SwitchCredentials(BaseModel):
     old_password: str
     new_password: Optional[str] = None
@@ -53,7 +54,7 @@ class PatreonIntegration(Integration):
                 data = await response.text()
 
             return data
-        
+
         if response.status == 204:
             return "Successful"
 
@@ -144,7 +145,7 @@ class PatreonIntegration(Integration):
                     for ts in timestamps:
                         if ts in nested_data:
                             time_series[ts] = {k: v for k, v in nested_data[ts].items()
-                                             if k.startswith(('sum_', 'cumulative_sum_'))}
+                                               if k.startswith(('sum_', 'cumulative_sum_'))}
                     result['time_series'] = time_series
 
         # If this is a tier breakdown response
@@ -174,7 +175,7 @@ class PatreonIntegration(Integration):
                     for ts in tier_timestamps:
                         if ts.isdigit() and ts in tier_data:
                             time_series[ts] = {k: v for k, v in tier_data[ts].items()
-                                             if k.startswith(('sum_', 'cumulative_sum_'))}
+                                               if k.startswith(('sum_', 'cumulative_sum_'))}
 
                     result['tier_breakdown'][tier_id] = {
                         'tier_info': tier_info,
@@ -190,9 +191,9 @@ class PatreonIntegration(Integration):
 
         # Add convenience methods for common queries
         result['paid_tiers'] = [tid for tid, info in tier_lookup.items()
-                               if not info.get('is_free_tier', False)]
+                                if not info.get('is_free_tier', False)]
         result['free_tiers'] = [tid for tid, info in tier_lookup.items()
-                               if info.get('is_free_tier', False)]
+                                if info.get('is_free_tier', False)]
 
         return result
 
@@ -452,8 +453,8 @@ class PatreonIntegration(Integration):
             error_code="server_error",
             status_code=500,
         )
-    
-    async def change_patreon_credentials(self, request:SwitchCredentials):
+
+    async def change_patreon_credentials(self, request: SwitchCredentials):
         """
         Reverse engineers the process of changing credentials on Patreon.
 
@@ -469,7 +470,8 @@ class PatreonIntegration(Integration):
         switch_headers = self.headers.copy()
         print("Fetching CSRF token from account settings...")
         try:
-            account_page_res = await self._make_request("GET", "https://www.patreon.com/settings/account", headers=switch_headers)
+            account_page_res = await self._make_request("GET", "https://www.patreon.com/settings/account",
+                                                        headers=switch_headers)
             soup = BeautifulSoup(account_page_res, "html.parser")
             csrf_token_meta = soup.find("meta", {"name": "csrf-token"})
             if not csrf_token_meta or not csrf_token_meta.get("content"):
@@ -481,10 +483,10 @@ class PatreonIntegration(Integration):
             switch_headers.update({"x-csrf-signature": csrf_token})
             print("Successfully retrieved CSRF token.")
         except Exception as e:
-                print(f"Error fetching CSRF token: {e}")
-                return JSONResponse(status_code=500, content={
-                    "message": "Something went wrong fetching CSRF token."
-                })
+            print(f"Error fetching CSRF token: {e}")
+            return JSONResponse(status_code=500, content={
+                "message": "Something went wrong fetching CSRF token."
+            })
 
         # 2. Disconnect Google Account
         print("\nAttempting to disconnect Google account...")
@@ -496,7 +498,7 @@ class PatreonIntegration(Integration):
             else:
                 print("Failed to disconnect auth service")
         except Exception as e:
-                print(f"An error occurred while trying to disconnect Google: {e}")
+            print(f"An error occurred while trying to disconnect Google: {e}")
 
         email_res_string = "No email provided to change."
         # 3. Change Email (if provided)
@@ -510,7 +512,8 @@ class PatreonIntegration(Integration):
                 }
             }
             try:
-                email_res = await self._make_request("PATCH", email_change_url, json=email_payload, headers=switch_headers)
+                email_res = await self._make_request("PATCH", email_change_url, json=email_payload,
+                                                     headers=switch_headers)
                 if email_res and email_res.get("data"):
                     print(f"Successfully changed email to: {request.new_email}")
                     email_res_string = "Successfully changed email. A verification code has been sent to your inbox."
@@ -535,7 +538,8 @@ class PatreonIntegration(Integration):
                 }
             }
             try:
-                password_res = await self._make_request("POST", password_change_url, json=password_payload, headers=switch_headers)
+                password_res = await self._make_request("POST", password_change_url, json=password_payload,
+                                                        headers=switch_headers)
                 if password_res == "Successful":
                     password_res_string = "Successfully changed password."
                     print(password_res_string)
@@ -547,7 +551,123 @@ class PatreonIntegration(Integration):
                 print(f"An error occurred during password change: {e}")
                 password_res_string = "Failed to change password."
 
-
         return JSONResponse(status_code=200, content={
-                    "message": f"{email_res_string} {password_res_string}"
-                })
+            "message": f"{email_res_string} {password_res_string}"
+        })
+
+    async def fetch_post_data(self, post_id: str):
+        data_path = f"{self.url}/api/posts/{post_id}"
+        params = {
+            # Include relationships - combined from both requests, removed 'custom_thumbnail_media.null'
+            "include": ",".join([
+                # "access_rules.tier.null",
+                "attachments.null",
+                "attachments_media",
+                "audio",
+                # "audio_preview.null",
+                # "campaign.access_rules.tier.null",
+                "campaign.earnings_visibility",
+                "campaign.is_nsfw",
+                # "can_ask_pls_question_via_zendesk",
+                "custom_thumbnail_media.null",
+                "collaborations",
+                "collections",
+                "content_locks.null",
+                "content_unlock_options.product_variant.null",
+                "content_unlock_options.product_variant.insights",  # From second request
+                "content_unlock_options.reward.null",
+                "drop",
+                "images.null",
+                "moderator_actions",
+                "native_video_insights",  # From second request
+                "parent_highlight_post",
+                "podcast",
+                "poll",
+                "poll.choices",
+                "publish_channels",
+                "rss_synced_feed",
+                "shows",
+                # "user.null",
+                "user_defined_tags.null",
+                "video"
+            ]),
+
+            # Post fields - combined from both requests, removed 'thumbnail' and 'thumbnail_position'
+            "fields[post]": ",".join([
+                "allow_preview_in_rss",
+                "audio",  # From second request
+                "category",
+                "cents_pledged_at_creation",
+                "change_visibility_at",
+                "comment_count",
+                "commenter_count",  # From second request
+                "comments_write_access_level",
+                "content",
+                "created_at",
+                # "current_user_can_delete",
+                "current_user_can_view",
+                "current_user_has_liked",
+                "deleted_at",
+                # "edit_url",
+                "edited_at",
+                # "embed",
+                "image",
+                "impression_count",  # From second request
+                "insights_last_updated_at",  # From second request
+                "is_automated_monthly_charge",
+                "is_paid",
+                "is_highlight",
+                "is_preview_blurred",
+                "like_count",
+                "min_cents_pledged_to_view",
+                "monetization_ineligibility_reason",  # From second request
+                "new_post_email_type",
+                "num_pushable_users",
+                "patreon_url",
+                "patron_count",
+                "paywall_display",
+                "pledge_url",
+                "post_file",
+                "post_metadata",
+                "post_type",
+                "preview_asset_type",
+                "published_at",
+                "scheduled_for",
+                "teaser_text",
+                "title",
+                "url",
+                "video",  # From second request
+                "view_count",  # From second request
+                "was_posted_by_campaign_owner",
+                "video_external_upload_url",
+                "moderation_status",
+                # "video_preview_start_ms",
+                # "video_preview_end_ms",
+                # "post_level_suspension_removal_date",
+                "pls_one_liners_by_category",
+                # "can_ask_pls_question_via_zendesk",
+                # "current_user_has_post_visibility_locked"
+            ]),
+
+            # Other entity fields - combined from both requests
+            # "fields[access_rule]": "access_rule_type,amount_cents",
+            "fields[reward]": "title,amount_cents,currency,patron_count,id,published,is_free_tier",
+            "fields[campaign]": "can_create_paid_posts,comments_access_level,is_nsfw,offers_free_membership,default_post_price_cents",
+            "fields[media]": "id,image_urls,display,download_url,metadata,closed_captions_enabled,closed_captions,size_bytes,file_name,state,media_type",
+            "fields[insights]": "earnings,sales,currency_code",  # From second request
+            "fields[content-unlock-option]": "content_unlock_type,reward_benefit_categories",  # Combined
+            "fields[product-variant]": "price_cents,currency_code,is_hidden,published_at_datetime,orders_count,live_sale_discounted_price_cents,live_sale_discounted_price_info",
+            # Combined
+            "fields[podcast]": "rss_published_at",
+            "fields[rss-synced-feed]": "rss_url",
+            "fields[shows]": "id,title,description",  # removed 'thumbnail' from here too
+            "fields[post-collaboration]": "status,collaborator_campaign_id,collaborator_name",
+
+            # API version settings
+            "json-api-version": "1.0",
+            "json-api-use-default-includes": "false"
+        }
+        response = await self._make_request(method="GET", url=data_path, params=params, headers=self.headers)
+        # if isinstance(response, dict):
+        #     response.pop("included", None)
+        return response
